@@ -20,7 +20,7 @@
 - [x] Add real log streaming from Kubernetes pods.
 - [x] Enforce a global limit on concurrent job dispatches.
 - [x] Document RBAC setup and cluster requirements.
-- [ ] Expose basic metrics for job execution counts.
+- [x] Expose basic metrics for job execution counts.
 - [ ] Allow configuring pod security context in job templates.
 - [ ] Support custom environment variables per job.
 - [ ] Support custom job templates provided via external YAML files.

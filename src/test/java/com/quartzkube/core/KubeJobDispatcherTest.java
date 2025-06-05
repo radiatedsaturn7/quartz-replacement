@@ -217,4 +217,14 @@ public class KubeJobDispatcherTest {
         long elapsed = System.currentTimeMillis() - start;
         assertTrue(elapsed >= 400);
     }
+
+    @Test
+    public void testMetricsCount() {
+        JobMetrics.reset();
+        KubeJobDispatcher dispatcher = new KubeJobDispatcher(true);
+        dispatcher.dispatchJob(LocalJob.class.getName());
+        assertEquals(1, JobMetrics.getDispatchedCount());
+        assertEquals(1, JobMetrics.getSucceededCount());
+        assertEquals(0, JobMetrics.getFailedCount());
+    }
 }

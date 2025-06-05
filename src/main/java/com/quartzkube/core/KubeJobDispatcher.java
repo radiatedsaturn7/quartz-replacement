@@ -69,6 +69,7 @@ public class KubeJobDispatcher {
             Thread.currentThread().interrupt();
             return;
         }
+        JobMetrics.recordDispatch();
 
         String imageOverride = null;
         String cpuOverride = null;
@@ -144,9 +145,16 @@ public class KubeJobDispatcher {
                 return;
             }
             try {
+                JobMetrics.recordDispatch();
                 Class<?> clazz = Class.forName(jobClass);
                 Runnable job = (Runnable) clazz.getDeclaredConstructor().newInstance();
-                job.run();
+                try {
+                    job.run();
+                    JobMetrics.recordSuccess();
+                } catch (Exception e) {
+                    JobMetrics.recordFailure();
+                    throw e;
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
@@ -162,6 +170,7 @@ public class KubeJobDispatcher {
             Thread.currentThread().interrupt();
             return;
         }
+        JobMetrics.recordDispatch();
         String imageOverride = null;
         String cpuOverride = null;
         String memOverride = null;

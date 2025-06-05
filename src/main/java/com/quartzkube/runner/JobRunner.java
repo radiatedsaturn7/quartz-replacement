@@ -18,6 +18,15 @@ public class JobRunner {
 
         Class<?> clazz = Class.forName(className);
         Runnable job = (Runnable) clazz.getDeclaredConstructor().newInstance();
-        job.run();
+        try {
+            job.run();
+            com.quartzkube.core.JobMetrics.recordSuccess();
+        } catch (Throwable t) {
+            com.quartzkube.core.JobMetrics.recordFailure();
+            if (t instanceof Exception e) {
+                throw e;
+            }
+            throw new Exception(t);
+        }
     }
 }
