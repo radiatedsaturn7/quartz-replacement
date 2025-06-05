@@ -1,0 +1,28 @@
+# TODO List
+- [x] Initialize project skeleton with Maven build and stub classes (QuartzKubeScheduler, KubeJobDispatcher, JobTemplateBuilder, JobRunner, example HelloWorldJob).
+- [x] Implement basic QuartzKubeScheduler start and scheduleJob logic (in-memory schedule only).
+- [x] Flesh out KubeJobDispatcher to create Kubernetes Job manifests (no real API calls).
+- [x] Add JobRunner logic to load and run a job class by name via reflection.
+- [x] Provide simple tests for scheduler interactions.
+- [x] Allow configuring the container image via an environment variable in JobTemplateBuilder.
+- [x] Add a local execution mode to KubeJobDispatcher for testing without Kubernetes.
+- [x] Stream job logs to stdout (placeholder implementation).
+- [x] Add example Kubernetes YAML files for reference.
+- [x] Integrate with the Kubernetes API client to actually create Job resources.
+- [x] Support per-job container image overrides via JobDataMap.
+- [x] Optional CronJob integration for recurring schedules.
+ - [x] Implement cleanup/TTL logic for completed Kubernetes Jobs.
+ - [x] Provide a sample Dockerfile for building the JobRunner image.
+- [x] Allow configuration of CPU and memory limits for dispatched jobs.
+- [x] Enable setting the target namespace for created Kubernetes resources.
+- [x] Implement retry/backoff handling using Kubernetes Job settings.
+- [x] Implement @DisallowConcurrentExecution serialization logic.
+- [x] Add real log streaming from Kubernetes pods.
+- [x] Enforce a global limit on concurrent job dispatches.
+- [x] Document RBAC setup and cluster requirements.
+- [ ] Expose basic metrics for job execution counts.
+- [ ] Allow configuring pod security context in job templates.
+- [ ] Support custom environment variables per job.
+- [ ] Support custom job templates provided via external YAML files.
+- [ ] Provide a simple persistence mechanism using Kubernetes CRDs.
+- [ ] Support CronJob timeZone configuration.

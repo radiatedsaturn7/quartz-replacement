@@ -888,3 +888,6 @@ Favicon
 nubenetes
 Favicon
 kubernetes
+
+## Cluster Requirements
+See [docs/cluster-setup.md](docs/cluster-setup.md) for RBAC roles and cluster preparation steps.
