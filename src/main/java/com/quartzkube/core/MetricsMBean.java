@@ -6,4 +6,6 @@ package com.quartzkube.core;
 public interface MetricsMBean {
     int getSuccessCount();
     int getFailureCount();
+    long getTotalDurationMillis();
+    double getAverageDurationMillis();
 }

@@ -32,7 +32,9 @@ public class JobTemplateBuilder {
                                   java.util.Map<String, String> labels,
                                   java.util.Map<String, String> annotations,
                                   String affinity,
-                                  String serviceAccount) {
+                                  String serviceAccount,
+                                  String extraContainers,
+                                  String volumes) {
         String envLines = "- name: JOB_CLASS\n          value: \"" + jobClass + "\"";
         if (extraEnv != null) {
             for (java.util.Map.Entry<String, String> e : extraEnv.entrySet()) {
@@ -64,7 +66,9 @@ public class JobTemplateBuilder {
                 .replace("${LABELS}", labelLines)
                 .replace("${ANNOTATIONS}", annotationLines)
                 .replace("${AFFINITY}", affinity != null ? affinity : "")
-                .replace("${SERVICE_ACCOUNT}", serviceAccount != null ? serviceAccount : "");
+                .replace("${SERVICE_ACCOUNT}", serviceAccount != null ? serviceAccount : "")
+                .replace("${EXTRA_CONTAINERS}", extraContainers != null ? extraContainers : "")
+                .replace("${VOLUMES}", volumes != null ? volumes : "");
 
         if (schedule != null) template = template.replace("${SCHEDULE}", schedule);
         if (timeZone != null) template = template.replace("${TIME_ZONE}", timeZone);
@@ -204,7 +208,9 @@ public class JobTemplateBuilder {
                                         java.util.Map<String, String> labels,
                                         java.util.Map<String, String> annotations,
                                         String affinity,
-                                        String serviceAccountOverride) {
+                                        String serviceAccountOverride,
+                                        String extraContainers,
+                                        String volumes) {
         try {
             String template = readFile(templateFile);
             String img = imageOverride != null ? imageOverride : image;
@@ -212,7 +218,7 @@ public class JobTemplateBuilder {
             String mem = memoryOverride != null ? memoryOverride : memoryLimit;
             String sa = serviceAccountOverride != null ? serviceAccountOverride : serviceAccount;
             return renderTemplate(template, jobClass, null, img, cpu, mem, backoffOverride, null,
-                    extraEnv, labels, annotations, affinity, sa);
+                    extraEnv, labels, annotations, affinity, sa, extraContainers, volumes);
         } catch (java.io.IOException e) {
             throw new RuntimeException("Failed to read template file", e);
         }
@@ -228,7 +234,9 @@ public class JobTemplateBuilder {
                                                java.util.Map<String, String> labels,
                                                java.util.Map<String, String> annotations,
                                                String affinity,
-                                               String serviceAccountOverride) {
+                                               String serviceAccountOverride,
+                                               String extraContainers,
+                                               String volumes) {
         try {
             String template = readFile(templateFile);
             String img = imageOverride != null ? imageOverride : image;
@@ -237,7 +245,7 @@ public class JobTemplateBuilder {
             String tz = timeZoneOverride != null ? timeZoneOverride : cronTimeZone;
             String sa = serviceAccountOverride != null ? serviceAccountOverride : serviceAccount;
             template = renderTemplate(template, jobClass, schedule, img, cpu, mem, backoffOverride, tz,
-                    extraEnv, labels, annotations, affinity, sa);
+                    extraEnv, labels, annotations, affinity, sa, extraContainers, volumes);
             return template;
         } catch (java.io.IOException e) {
             throw new RuntimeException("Failed to read template file", e);

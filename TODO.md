@@ -70,3 +70,12 @@
 - [x] Document service account configuration in DOC.md.
 - [x] Introduce `KubernetesApiService` abstraction for pluggable client implementations.
 - [x] Provide alternative `KubernetesApiService` using the official Kubernetes client and document customization options.
+
+## Additional Future Tasks
+ - [x] Implement misfire handling for CronTrigger and SimpleTrigger according to Quartz misfire instructions.
+- [x] Add leader election so multiple scheduler instances can coordinate using Kubernetes Lease objects.
+- [x] Record job execution durations and expose them via the Metrics server.
+- [x] Support advanced pod templates allowing multiple containers and volume mounts.
+- [ ] Implement PersistJobDataAfterExecution by capturing updated JobDataMap in JobRunner.
+- [ ] Document high availability setup (leader election, misfire handling) in DOC.md.
+ - [ ] Add CronJob offload mode for long-running recurring schedules.

@@ -88,6 +88,7 @@ Any custom Kubernetes options (image, resources, etc.) are provided through a `M
 
 Metrics are exposed via JMX under the object name `com.quartzkube.core:type=Metrics`.
 Set `METRICS_PORT` to expose an HTTP `/metrics` endpoint in Prometheus format.
+Metrics include counters for successes, failures, and total job duration along with the average execution time.
 
 ## 6. Advanced Features
 
@@ -100,6 +101,7 @@ Set `METRICS_PORT` to expose an HTTP `/metrics` endpoint in Prometheus format.
 - **Custom labels/annotations** – include `labels` or `annotations` maps in job data to tag created resources.
 - **Pod affinity/anti-affinity** – supply an `affinity` YAML snippet in the job data to set `spec.affinity` rules.
 - **Service account override** – specify `serviceAccount` in job data to use a different service account.
+- **Advanced pod templates** – when using `templateFile` or `cronTemplateFile`, include `extraContainers` and `volumes` YAML to add sidecars and mounts.
 - **Pluggable Kubernetes client** – set `K8S_CLIENT_IMPL` to `official` to use the official client instead of the default Fabric8 implementation.
 
 ## 7. More Migration Examples

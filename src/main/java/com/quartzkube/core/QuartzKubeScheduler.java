@@ -2,6 +2,8 @@ package com.quartzkube.core;
 
 import java.util.*;
 import java.util.concurrent.*;
+
+import com.quartzkube.core.LeaderElection;
 import org.quartz.JobDetail;
 import org.quartz.Trigger;
 import org.quartz.TriggerListener;
@@ -21,6 +23,7 @@ public class QuartzKubeScheduler {
     private final Map<Class<?>, Queue<Class<?>>> pending = new ConcurrentHashMap<>();
     private final Set<Class<?>> running = ConcurrentHashMap.newKeySet();
     private final JobStore store;
+    private LeaderElection leaderElection;
     private final List<JobListener> jobListeners = new CopyOnWriteArrayList<>();
     private final List<TriggerListener> triggerListeners = new CopyOnWriteArrayList<>();
     private volatile boolean started = false;
@@ -31,6 +34,14 @@ public class QuartzKubeScheduler {
 
     public QuartzKubeScheduler(JobStore store) {
         this.store = store;
+    }
+
+    private static String getConfig(String key, String def) {
+        String v = System.getProperty(key);
+        if (v == null || v.isEmpty()) {
+            v = System.getenv(key);
+        }
+        return v == null || v.isEmpty() ? def : v;
     }
 
     /** Register a JobListener to receive job events. */
@@ -50,6 +61,14 @@ public class QuartzKubeScheduler {
     public void start() {
         Metrics.init();
         MetricsServer.init();
+        String enable = getConfig("ENABLE_LEADER_ELECTION", "false");
+        if (Boolean.parseBoolean(enable)) {
+            String apiUrl = getConfig("KUBE_API_URL", "http://localhost:8001");
+            String ns = getConfig("JOB_NAMESPACE", "default");
+            String name = getConfig("LEASE_NAME", "quartzkube-leader");
+            leaderElection = new LeaderElection(apiUrl, ns, name);
+            leaderElection.start();
+        }
         started = true;
         try {
             for (String cls : store.loadJobs()) {
@@ -73,6 +92,9 @@ public class QuartzKubeScheduler {
         if (!started) {
             throw new IllegalStateException("Scheduler not started");
         }
+        if (leaderElection != null && !leaderElection.isLeader()) {
+            return;
+        }
         try {
             store.saveJob(jobClass.getName());
         } catch (Exception ignored) {}
@@ -87,6 +109,9 @@ public class QuartzKubeScheduler {
     public void scheduleJob(JobDetail detail, Trigger trigger) {
         if (detail == null || trigger == null) {
             throw new IllegalArgumentException("JobDetail and Trigger required");
+        }
+        if (leaderElection != null && !leaderElection.isLeader()) {
+            return;
         }
         Class<?> jobClass = detail.getJobClass();
         if (trigger instanceof CronTrigger cron) {
@@ -106,6 +131,15 @@ public class QuartzKubeScheduler {
             scheduleJob(jobClass);
             return;
         }
+
+        Date now = new Date();
+        if (cron.getStartTime() != null && cron.getStartTime().before(now)) {
+            int instr = cron.getMisfireInstruction();
+            if (instr == CronTrigger.MISFIRE_INSTRUCTION_FIRE_ONCE_NOW) {
+                scheduleJobInternal(jobClass, cron);
+            }
+        }
+
         Runnable task = new Runnable() {
             @Override public void run() {
                 scheduleJobInternal(jobClass, cron);
@@ -116,7 +150,8 @@ public class QuartzKubeScheduler {
                 }
             }
         };
-        Date first = expr.getNextValidTimeAfter(new Date());
+
+        Date first = expr.getNextValidTimeAfter(now);
         if (first != null) {
             long delay = first.getTime() - System.currentTimeMillis();
             executor.schedule(task, Math.max(delay, 0), TimeUnit.MILLISECONDS);
@@ -125,15 +160,37 @@ public class QuartzKubeScheduler {
 
     private void scheduleSimple(Class<?> jobClass, SimpleTrigger trig) {
         Date start = trig.getStartTime();
+        long now = System.currentTimeMillis();
         long delay = 0;
         if (start != null) {
-            delay = start.getTime() - System.currentTimeMillis();
-            if (delay < 0) delay = 0;
+            delay = start.getTime() - now;
         }
+
         int repeat = trig.getRepeatCount();
         long interval = trig.getRepeatInterval();
+
+        if (delay < 0) {
+            int instr = trig.getMisfireInstruction();
+            if (instr == SimpleTrigger.MISFIRE_INSTRUCTION_FIRE_NOW) {
+                scheduleJobInternal(jobClass, trig);
+                if (repeat != SimpleTrigger.REPEAT_INDEFINITELY) {
+                    repeat--;
+                }
+                delay = interval > 0 ? interval : 0;
+            } else if (interval > 0) {
+                long missed = (-delay) / interval + 1;
+                delay = interval - ((-delay) % interval);
+                if (repeat != SimpleTrigger.REPEAT_INDEFINITELY) {
+                    repeat = Math.max(0, repeat - (int) missed);
+                }
+            } else {
+                delay = 0;
+            }
+        }
+
+        final int startRemaining = repeat;
         Runnable task = new Runnable() {
-            int remaining = repeat;
+            int remaining = startRemaining;
             @Override public void run() {
                 scheduleJobInternal(jobClass, trig);
                 if (remaining == SimpleTrigger.REPEAT_INDEFINITELY || remaining-- > 0) {
@@ -141,7 +198,8 @@ public class QuartzKubeScheduler {
                 }
             }
         };
-        executor.schedule(task, delay, TimeUnit.MILLISECONDS);
+
+        executor.schedule(task, Math.max(delay, 0), TimeUnit.MILLISECONDS);
     }
 
     private void scheduleJobInternal(Class<?> jobClass) {
@@ -149,6 +207,9 @@ public class QuartzKubeScheduler {
     }
 
     private void scheduleJobInternal(Class<?> jobClass, Trigger trigger) {
+        if (leaderElection != null && !leaderElection.isLeader()) {
+            return;
+        }
         boolean disallow = jobClass.isAnnotationPresent(DisallowConcurrentExecution.class);
         if (disallow && running.contains(jobClass)) {
             pending.computeIfAbsent(jobClass, k -> new ArrayDeque<>()).add(jobClass);
@@ -186,6 +247,7 @@ public class QuartzKubeScheduler {
                 try { jl.jobToBeExecuted(null); } catch (Exception ignore) {}
             }
             Exception err = null;
+            long startTime = System.currentTimeMillis();
             try {
                 Object obj = jobClass.getDeclaredConstructor().newInstance();
                 if (obj instanceof Runnable runnable) {
@@ -201,6 +263,7 @@ public class QuartzKubeScheduler {
                 err = e;
                 e.printStackTrace();
             } finally {
+                Metrics.getInstance().recordDuration(System.currentTimeMillis() - startTime);
                 for (JobListener jl : jobListeners) {
                     try { jl.jobWasExecuted(null, err == null ? null : new org.quartz.JobExecutionException(err)); } catch (Exception ignore) {}
                 }
@@ -228,6 +291,9 @@ public class QuartzKubeScheduler {
     /** Shuts down the scheduler executor. */
     public void shutdown() {
         executor.shutdownNow();
+        if (leaderElection != null) {
+            leaderElection.stop();
+        }
         started = false;
     }
 }

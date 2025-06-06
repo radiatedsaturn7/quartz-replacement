@@ -151,6 +151,8 @@ public class KubeJobDispatcher {
         String templateFile = null;
         String affinity = null;
         String timeZoneOverride = null;
+        String extraContainers = null;
+        String volumes = null;
         java.util.Map<String, String> env = null;
         java.util.Map<String, String> labels = null;
         java.util.Map<String, String> annotations = null;
@@ -233,11 +235,35 @@ public class KubeJobDispatcher {
                     affinity = v.toString();
                 }
             }
+            if (jobData.containsKey("extraContainers")) {
+                Object v = jobData.get("extraContainers");
+                if (v != null) {
+                    extraContainers = v.toString();
+                }
+            }
+            if (jobData.containsKey("volumes")) {
+                Object v = jobData.get("volumes");
+                if (v != null) {
+                    volumes = v.toString();
+                }
+            }
+            if (jobData.containsKey("extraContainers")) {
+                Object v = jobData.get("extraContainers");
+                if (v != null) {
+                    extraContainers = v.toString();
+                }
+            }
+            if (jobData.containsKey("volumes")) {
+                Object v = jobData.get("volumes");
+                if (v != null) {
+                    volumes = v.toString();
+                }
+            }
         }
 
         String manifest;
         if (templateFile != null) {
-            manifest = templateBuilder.buildCronJobTemplateFromFile(jobClass, schedule, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity, saOverride);
+            manifest = templateBuilder.buildCronJobTemplateFromFile(jobClass, schedule, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity, saOverride, extraContainers, volumes);
         } else {
             manifest = templateBuilder.buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity, saOverride);
         }
@@ -303,6 +329,8 @@ public class KubeJobDispatcher {
         String templateFile = null;
         String affinity = null;
         String saOverride = null;
+        String extraContainers = null;
+        String volumes = null;
         java.util.Map<String, String> env = null;
         java.util.Map<String, String> labels = null;
         java.util.Map<String, String> annotations = null;
@@ -382,7 +410,7 @@ public class KubeJobDispatcher {
 
         String manifest;
         if (templateFile != null) {
-            manifest = templateBuilder.buildTemplateFromFile(jobClass, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity, saOverride);
+            manifest = templateBuilder.buildTemplateFromFile(jobClass, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity, saOverride, extraContainers, volumes);
         } else {
             manifest = templateBuilder.buildTemplate(jobClass, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity, saOverride);
         }
