@@ -288,7 +288,7 @@ public class KubeJobDispatcherTest {
         String template = "kind: Job\nmetadata:\n  name: ${JOB_NAME}\n  namespace: ${NAMESPACE}\nspec:\n  template:\n    spec:\n      containers:\n      - name: job\n        image: ${IMAGE}\n        env:\n        - name: JOB_CLASS\n          value: ${JOB_CLASS}\n";
         java.nio.file.Files.writeString(tmp, template);
         JobTemplateBuilder builder = new JobTemplateBuilder("img");
-        String yaml = builder.buildTemplateFromFile("com.example.DummyJob", tmp.toString(), null, null, null, null, null, null, null, null, null);
+        String yaml = builder.buildTemplateFromFile("com.example.DummyJob", tmp.toString(), null, null, null, null, null, null, null, null, null, null, null);
         assertTrue(yaml.contains("name: com.example.dummyjob"));
         assertTrue(yaml.contains("namespace: default"));
         assertTrue(yaml.contains("image: img"));

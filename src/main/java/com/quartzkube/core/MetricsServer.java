@@ -72,6 +72,12 @@ public final class MetricsServer {
         sb.append("# HELP quartzkube_job_failure_total Number of failed job executions\n");
         sb.append("# TYPE quartzkube_job_failure_total counter\n");
         sb.append("quartzkube_job_failure_total ").append(m.getFailureCount()).append('\n');
+        sb.append("# HELP quartzkube_job_duration_millis_total Total time spent running jobs in milliseconds\n");
+        sb.append("# TYPE quartzkube_job_duration_millis_total counter\n");
+        sb.append("quartzkube_job_duration_millis_total ").append(m.getTotalDurationMillis()).append('\n');
+        sb.append("# HELP quartzkube_job_duration_millis_avg Average job execution time in milliseconds\n");
+        sb.append("# TYPE quartzkube_job_duration_millis_avg gauge\n");
+        sb.append("quartzkube_job_duration_millis_avg ").append(m.getAverageDurationMillis()).append('\n');
         return sb.toString();
     }
 }

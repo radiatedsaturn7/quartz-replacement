@@ -13,6 +13,8 @@ public final class Metrics implements MetricsMBean {
 
     private final AtomicInteger successCount = new AtomicInteger();
     private final AtomicInteger failureCount = new AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicLong totalDuration = new java.util.concurrent.atomic.AtomicLong();
+    private final AtomicInteger durationSamples = new AtomicInteger();
 
     private Metrics() {}
 
@@ -48,6 +50,12 @@ public final class Metrics implements MetricsMBean {
         failureCount.incrementAndGet();
     }
 
+    /** Record the duration of a job execution in milliseconds. */
+    public void recordDuration(long millis) {
+        totalDuration.addAndGet(millis);
+        durationSamples.incrementAndGet();
+    }
+
     @Override
     public int getSuccessCount() {
         return successCount.get();
@@ -58,8 +66,24 @@ public final class Metrics implements MetricsMBean {
         return failureCount.get();
     }
 
+    @Override
+    public long getTotalDurationMillis() {
+        return totalDuration.get();
+    }
+
+    @Override
+    public double getAverageDurationMillis() {
+        int samples = durationSamples.get();
+        if (samples == 0) {
+            return 0.0;
+        }
+        return totalDuration.get() / (double) samples;
+    }
+
     static void reset() {
         INSTANCE.successCount.set(0);
         INSTANCE.failureCount.set(0);
+        INSTANCE.totalDuration.set(0);
+        INSTANCE.durationSamples.set(0);
     }
 }
