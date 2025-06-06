@@ -10,8 +10,12 @@ public class KubeJobDispatcher {
     private final boolean localMode;
     private final String apiUrl;
     private final String namespace;
+    private final io.fabric8.kubernetes.client.KubernetesClient client;
+    private final boolean useWatch;
+    private final boolean streamLogs;
     private final java.util.concurrent.Semaphore dispatchLimiter;
     private final java.util.List<JobResultListener> listeners = new java.util.ArrayList<>();
+    private PodLogHandler logHandler = new StdoutLogHandler();
 
     private static String getConfig(String key, String def) {
         String v = System.getProperty(key);
@@ -47,6 +51,14 @@ public class KubeJobDispatcher {
         this.localMode = localMode;
         this.apiUrl = apiUrl;
         this.namespace = namespace;
+        this.useWatch = Boolean.parseBoolean(getConfig("USE_WATCH", "true"));
+        this.streamLogs = Boolean.parseBoolean(getConfig("STREAM_LOGS", "true"));
+        io.fabric8.kubernetes.client.Config cfg = new io.fabric8.kubernetes.client.ConfigBuilder()
+                .withMasterUrl(apiUrl)
+                .withNamespace(namespace)
+                .withTrustCerts(true)
+                .build();
+        this.client = new io.fabric8.kubernetes.client.DefaultKubernetesClient(cfg);
         this.templateBuilder = new JobTemplateBuilder(
             getConfig("JOB_IMAGE", "quartz-job-runner:latest"),
             parseInt(getConfig("JOB_TTL_SECONDS", null)),
@@ -66,6 +78,13 @@ public class KubeJobDispatcher {
     /** Register a listener for job completion events. */
     public void addListener(JobResultListener l) {
         listeners.add(l);
+    }
+
+    /** Set a custom handler to process pod log lines. */
+    public void setLogHandler(PodLogHandler handler) {
+        if (handler != null) {
+            this.logHandler = handler;
+        }
     }
 
     private static int parseLimit(String v) {
@@ -199,28 +218,14 @@ public class KubeJobDispatcher {
             manifest = templateBuilder.buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity);
         }
         try {
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.URI uri = java.net.URI.create(
-                apiUrl + "/apis/batch/v1/namespaces/" + namespace + "/cronjobs");
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(uri)
-                .header("Content-Type", "application/yaml")
-                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(manifest))
-                .build();
-            java.net.http.HttpResponse<String> resp = client.send(
-                request,
-                java.net.http.HttpResponse.BodyHandlers.ofString()
-            );
-            System.out.println("Submitted cronjob, response code: " + resp.statusCode());
-            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
-                Metrics.getInstance().recordSuccess();
-            } else {
-                Metrics.getInstance().recordFailure();
-            }
+            client.load(new java.io.ByteArrayInputStream(manifest.getBytes())).create();
+            Metrics.getInstance().recordSuccess();
         } catch (Exception e) {
             Metrics.getInstance().recordFailure();
             e.printStackTrace();
         }
         streamLogs(jobClass);
+        monitorJob(jobClass);
         dispatchLimiter.release();
     }
 
@@ -350,32 +355,21 @@ public class KubeJobDispatcher {
         } else {
             manifest = templateBuilder.buildTemplate(jobClass, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity);
         }
-        boolean success = false;
+        boolean submitted = false;
         try {
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.URI uri = java.net.URI.create(
-                apiUrl + "/apis/batch/v1/namespaces/" + namespace + "/jobs");
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(uri)
-                .header("Content-Type", "application/yaml")
-                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(manifest))
-                .build();
-            java.net.http.HttpResponse<String> resp = client.send(
-                request,
-                java.net.http.HttpResponse.BodyHandlers.ofString()
-            );
-            System.out.println("Submitted job, response code: " + resp.statusCode());
-            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
-                Metrics.getInstance().recordSuccess();
-                success = true;
-            } else {
-                Metrics.getInstance().recordFailure();
-            }
+            client.load(new java.io.ByteArrayInputStream(manifest.getBytes())).create();
+            Metrics.getInstance().recordSuccess();
+            submitted = true;
         } catch (Exception e) {
             Metrics.getInstance().recordFailure();
             e.printStackTrace();
         }
-        streamLogs(jobClass);
-        notifyResult(jobClass, success);
+        if (submitted) {
+            streamLogs(jobClass);
+            monitorJob(jobClass);
+        } else {
+            notifyResult(jobClass, false);
+        }
         dispatchLimiter.release();
     }
 
@@ -384,25 +378,56 @@ public class KubeJobDispatcher {
      * simple GET request to the Kubernetes API and prints the response body.
      */
     private void streamLogs(String jobClass) {
+        if (!streamLogs) {
+            return;
+        }
         String podName = jobClass.toLowerCase();
         try {
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.URI uri = java.net.URI.create(
-                apiUrl + "/api/v1/namespaces/" + namespace + "/pods/" + podName + "/log?follow=false");
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(uri).GET().build();
-            java.net.http.HttpResponse<java.io.InputStream> resp = client.send(
-                request,
-                java.net.http.HttpResponse.BodyHandlers.ofInputStream()
-            );
-            try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(resp.body()))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    System.out.println(line);
-                }
+            String logs = client.pods().inNamespace(namespace).withName(podName).getLog();
+            for (String line : logs.split("\r?\n")) {
+                if (!line.isEmpty()) logHandler.handle(jobClass, line);
             }
         } catch (Exception e) {
-            System.out.println("Failed to stream logs: " + e.getMessage());
+            logHandler.handle(jobClass, "Failed to stream logs: " + e.getMessage());
         }
+    }
+
+    /** Watch the pod for completion and notify listeners. */
+    private void monitorJob(String jobClass) {
+        if (!useWatch || localMode) {
+            return;
+        }
+        String podName = jobClass.toLowerCase();
+        Thread t = new Thread(() -> {
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            final io.fabric8.kubernetes.client.Watch watch = client.pods()
+                    .inNamespace(namespace)
+                    .withName(podName)
+                    .watch(new io.fabric8.kubernetes.client.Watcher<io.fabric8.kubernetes.api.model.Pod>() {
+                        @Override
+                        public void eventReceived(Action action, io.fabric8.kubernetes.api.model.Pod pod) {
+                            String phase = pod.getStatus() != null ? pod.getStatus().getPhase() : null;
+                            if ("Succeeded".equals(phase)) {
+                                notifyResult(jobClass, true);
+                                latch.countDown();
+                            } else if ("Failed".equals(phase)) {
+                                notifyResult(jobClass, false);
+                                latch.countDown();
+                            }
+                        }
+
+                        @Override
+                        public void onClose(io.fabric8.kubernetes.client.WatcherException e) {
+                            latch.countDown();
+                        }
+                    });
+            try {
+                latch.await();
+            } catch (InterruptedException ignored) {}
+            watch.close();
+        });
+        t.setDaemon(true);
+        t.start();
     }
 
     private void notifyResult(String jobClass, boolean success) {
