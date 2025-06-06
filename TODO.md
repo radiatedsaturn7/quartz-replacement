@@ -58,3 +58,10 @@
 
 - [x] Move README.md to DESIGN.md.
 - [x] Create new README with Hello World instructions and example.
+
+# Additional Tasks
+- [x] Implement JDBC-backed JobStore for persistent scheduling and clustering.
+- [x] Add Quartz JobListener and TriggerListener support to propagate job events.
+- [x] Integrate slf4j logging by providing a pluggable log handler for job output.
+- [x] Replace manual HttpClient calls with the Fabric8 Kubernetes client and add watch-based job monitoring.
+

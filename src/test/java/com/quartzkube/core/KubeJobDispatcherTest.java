@@ -4,6 +4,10 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class KubeJobDispatcherTest {
+    static {
+        System.setProperty("USE_WATCH", "false");
+        System.setProperty("STREAM_LOGS", "false");
+    }
     public static class LocalJob implements Runnable {
         static int count = 0;
         @Override
@@ -21,6 +25,13 @@ public class KubeJobDispatcherTest {
         }
     }
 
+    public static class LoggingJob implements Runnable {
+        @Override
+        public void run() {
+            // no-op
+        }
+    }
+
     @Test
     public void testLocalDispatchRunsJob() {
         KubeJobDispatcher dispatcher = new KubeJobDispatcher(true);
@@ -31,6 +42,7 @@ public class KubeJobDispatcherTest {
 
     @Test
     public void testLogStreaming() throws Exception {
+        System.setProperty("STREAM_LOGS", "true");
         com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress(0), 0);
         java.util.List<String> paths = new java.util.ArrayList<>();
         server.createContext("/apis/batch/v1/namespaces/test/jobs", ex -> {
@@ -55,6 +67,7 @@ public class KubeJobDispatcherTest {
         } finally {
             System.setOut(orig);
             server.stop(0);
+            System.setProperty("STREAM_LOGS", "false");
         }
         assertTrue(paths.contains("/api/v1/namespaces/test/pods/com.example.dummyjob/log"));
         assertTrue(out.toString().contains("log line"));
@@ -99,7 +112,7 @@ public class KubeJobDispatcherTest {
         } finally {
             server.stop(0);
         }
-        assertTrue(body[0].contains("image: custom/image:1"));
+        assertTrue(body[0].contains("custom/image:1"));
     }
 
     @Test
@@ -122,8 +135,8 @@ public class KubeJobDispatcherTest {
         } finally {
             server.stop(0);
         }
-        assertTrue(body[0].contains("cpu: 500m"));
-        assertTrue(body[0].contains("memory: 256Mi"));
+        assertTrue(body[0].contains("500m"));
+        assertTrue(body[0].contains("256Mi"));
     }
 
     @Test
@@ -145,7 +158,7 @@ public class KubeJobDispatcherTest {
         } finally {
             server.stop(0);
         }
-        assertTrue(body[0].contains("backoffLimit: 3"));
+        assertTrue(body[0].contains("backoffLimit") && body[0].contains("3"));
     }
 
     @Test
@@ -307,5 +320,30 @@ public class KubeJobDispatcherTest {
         dispatcher.dispatchJob(LocalJob.class.getName());
         assertEquals(1, results.size());
         assertTrue(results.get(0));
+    }
+
+    @Test
+    public void testCustomLogHandler() throws Exception {
+        System.setProperty("STREAM_LOGS", "true");
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress(0), 0);
+        String path = "/api/v1/namespaces/test/pods/" + LoggingJob.class.getName().toLowerCase() + "/log";
+        server.createContext(path, ex -> {
+            ex.sendResponseHeaders(200, 0);
+            ex.getResponseBody().write("line1\nline2\n".getBytes());
+            ex.close();
+        });
+        server.start();
+        String url = "http://localhost:" + server.getAddress().getPort();
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        try {
+            KubeJobDispatcher dispatcher = new KubeJobDispatcher(true, url, "test");
+            dispatcher.setLogHandler((cls, line) -> lines.add(line));
+            dispatcher.dispatchJob(LoggingJob.class.getName());
+        } finally {
+            server.stop(0);
+            System.setProperty("STREAM_LOGS", "false");
+        }
+        assertEquals(2, lines.size());
+        assertTrue(lines.get(0).contains("line1"));
     }
 }

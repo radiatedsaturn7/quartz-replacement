@@ -90,11 +90,14 @@ Set `METRICS_PORT` to expose an HTTP `/metrics` endpoint in Prometheus format.
 ## 6. Advanced Features
 
 - **Custom templates** – pass `templateFile` (Job) or `cronTemplateFile` (CronJob) in the data map to render your own YAML.
-- **Persistence** – implement `JobStore` (e.g. `CrdJobStore`) and pass it to `QuartzKubeScheduler` to keep scheduled jobs across restarts.
+- **Persistence** – implement `JobStore` such as `CrdJobStore` or `JdbcJobStore` and pass it to `QuartzKubeScheduler` to keep scheduled jobs across restarts.
 
 - **Job result listeners** – register a `JobResultListener` with `KubeJobDispatcher` to be notified when jobs finish.
+- **Job/trigger listeners** – add standard Quartz `JobListener` or `TriggerListener` to `QuartzKubeScheduler` to observe job execution events.
+- **Pluggable log handler** – assign a `PodLogHandler` (e.g., `Slf4jLogHandler`) to `KubeJobDispatcher` to process pod logs.
 - **Custom labels/annotations** – include `labels` or `annotations` maps in job data to tag created resources.
 - **Pod affinity/anti-affinity** – supply an `affinity` YAML snippet in the job data to set `spec.affinity` rules.
+- **Fabric8 Kubernetes client** – all API calls use the Fabric8 client and jobs are monitored via a watch for completion.
 
 ## 7. More Migration Examples
 
@@ -133,6 +136,15 @@ Then follow the job logs:
 
 ```bash
 kubectl logs job/my-job -f
+```
+
+### 7.5 Logging via SLF4J
+
+Customize log output by installing `Slf4jLogHandler`:
+
+```java
+KubeJobDispatcher dispatcher = new KubeJobDispatcher(false);
+dispatcher.setLogHandler(new Slf4jLogHandler());
 ```
 
 

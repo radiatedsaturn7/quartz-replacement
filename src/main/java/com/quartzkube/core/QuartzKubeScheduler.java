@@ -4,6 +4,9 @@ import java.util.*;
 import java.util.concurrent.*;
 import org.quartz.JobDetail;
 import org.quartz.Trigger;
+import org.quartz.TriggerListener;
+import org.quartz.JobListener;
+import org.quartz.Trigger.CompletedExecutionInstruction;
 import org.quartz.CronTrigger;
 import org.quartz.SimpleTrigger;
 import org.quartz.CronExpression;
@@ -18,6 +21,8 @@ public class QuartzKubeScheduler {
     private final Map<Class<?>, Queue<Class<?>>> pending = new ConcurrentHashMap<>();
     private final Set<Class<?>> running = ConcurrentHashMap.newKeySet();
     private final JobStore store;
+    private final List<JobListener> jobListeners = new CopyOnWriteArrayList<>();
+    private final List<TriggerListener> triggerListeners = new CopyOnWriteArrayList<>();
     private volatile boolean started = false;
 
     public QuartzKubeScheduler() {
@@ -26,6 +31,16 @@ public class QuartzKubeScheduler {
 
     public QuartzKubeScheduler(JobStore store) {
         this.store = store;
+    }
+
+    /** Register a JobListener to receive job events. */
+    public void addJobListener(JobListener l) {
+        jobListeners.add(l);
+    }
+
+    /** Register a TriggerListener to receive trigger events. */
+    public void addTriggerListener(TriggerListener l) {
+        triggerListeners.add(l);
     }
 
     /**
@@ -93,7 +108,7 @@ public class QuartzKubeScheduler {
         }
         Runnable task = new Runnable() {
             @Override public void run() {
-                scheduleJobInternal(jobClass);
+                scheduleJobInternal(jobClass, cron);
                 Date next = expr.getNextValidTimeAfter(new Date());
                 if (next != null) {
                     long delay = next.getTime() - System.currentTimeMillis();
@@ -120,7 +135,7 @@ public class QuartzKubeScheduler {
         Runnable task = new Runnable() {
             int remaining = repeat;
             @Override public void run() {
-                scheduleJobInternal(jobClass);
+                scheduleJobInternal(jobClass, trig);
                 if (remaining == SimpleTrigger.REPEAT_INDEFINITELY || remaining-- > 0) {
                     executor.schedule(this, interval, TimeUnit.MILLISECONDS);
                 }
@@ -130,6 +145,10 @@ public class QuartzKubeScheduler {
     }
 
     private void scheduleJobInternal(Class<?> jobClass) {
+        scheduleJobInternal(jobClass, null);
+    }
+
+    private void scheduleJobInternal(Class<?> jobClass, Trigger trigger) {
         boolean disallow = jobClass.isAnnotationPresent(DisallowConcurrentExecution.class);
         if (disallow && running.contains(jobClass)) {
             pending.computeIfAbsent(jobClass, k -> new ArrayDeque<>()).add(jobClass);
@@ -140,6 +159,33 @@ public class QuartzKubeScheduler {
         }
 
         executor.submit(() -> {
+            for (TriggerListener tl : triggerListeners) {
+                try {
+                    tl.triggerFired(trigger, null);
+                } catch (Exception ignored) {}
+            }
+            boolean veto = false;
+            for (TriggerListener tl : triggerListeners) {
+                try {
+                    if (tl.vetoJobExecution(trigger, null)) {
+                        veto = true;
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (veto) {
+                for (JobListener jl : jobListeners) {
+                    try { jl.jobExecutionVetoed(null); } catch (Exception ignore) {}
+                }
+                for (TriggerListener tl : triggerListeners) {
+                    try { tl.triggerComplete(trigger, null, CompletedExecutionInstruction.NOOP); } catch (Exception ignore) {}
+                }
+                if (disallow) { finishNonConcurrent(jobClass); }
+                return;
+            }
+            for (JobListener jl : jobListeners) {
+                try { jl.jobToBeExecuted(null); } catch (Exception ignore) {}
+            }
+            Exception err = null;
             try {
                 Object obj = jobClass.getDeclaredConstructor().newInstance();
                 if (obj instanceof Runnable runnable) {
@@ -152,8 +198,15 @@ public class QuartzKubeScheduler {
                 Metrics.getInstance().recordSuccess();
             } catch (Exception e) {
                 Metrics.getInstance().recordFailure();
+                err = e;
                 e.printStackTrace();
             } finally {
+                for (JobListener jl : jobListeners) {
+                    try { jl.jobWasExecuted(null, err == null ? null : new org.quartz.JobExecutionException(err)); } catch (Exception ignore) {}
+                }
+                for (TriggerListener tl : triggerListeners) {
+                    try { tl.triggerComplete(trigger, null, CompletedExecutionInstruction.NOOP); } catch (Exception ignore) {}
+                }
                 if (disallow) {
                     finishNonConcurrent(jobClass);
                 }
