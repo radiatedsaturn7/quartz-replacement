@@ -15,7 +15,9 @@ Create a `QuartzKubeScheduler` and schedule jobs just like with Quartz:
 ```java
 QuartzKubeScheduler scheduler = new QuartzKubeScheduler();
 scheduler.start();
-scheduler.scheduleJob(MyJob.class);
+JobDetail detail = JobBuilder.newJob(MyJob.class).withIdentity("id").build();
+Trigger trig = TriggerBuilder.newTrigger().startNow().build();
+scheduler.scheduleJob(detail, trig);
 ```
 
 Jobs must implement `Runnable` with a public no-arg constructor.
@@ -47,7 +49,7 @@ sched.scheduleJob(detail, trig);
 // QuartzKube
 QuartzKubeScheduler sched = new QuartzKubeScheduler();
 sched.start();
-sched.scheduleJob(MyJob.class);
+sched.scheduleJob(detail, trig); // JobDetail and Trigger reused
 ```
 
 Any custom Kubernetes options (image, resources, etc.) are provided through a `Map` when dispatching a job or cron job.

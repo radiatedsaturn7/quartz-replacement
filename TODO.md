@@ -36,3 +36,7 @@
 - [x] Expose Prometheus metrics endpoint for metrics.
 - [x] Add integration tests using KinD or Minikube to exercise Kubernetes interactions.
 - [x] Add GitHub Actions workflow for Maven build and tests.
+
+## Next Steps
+- [x] Support scheduling via `JobDetail` and `Trigger` objects for better Quartz compatibility.
+- [x] Update DOC.md migration section to demonstrate using `JobDetail` and `Trigger` unchanged.

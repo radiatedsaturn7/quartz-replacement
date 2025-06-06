@@ -2,6 +2,8 @@ package com.quartzkube.core;
 
 import java.util.*;
 import java.util.concurrent.*;
+import org.quartz.JobDetail;
+import org.quartz.Trigger;
 
 /**
  * Stub implementation of a Quartz-compatible scheduler.
@@ -59,6 +61,17 @@ public class QuartzKubeScheduler {
         scheduleJobInternal(jobClass);
     }
 
+    /**
+     * Quartz-compatible API accepting JobDetail and Trigger. Currently Trigger
+     * details are ignored and the job is executed immediately.
+     */
+    public void scheduleJob(JobDetail detail, Trigger trigger) {
+        if (detail == null || trigger == null) {
+            throw new IllegalArgumentException("JobDetail and Trigger required");
+        }
+        scheduleJob(detail.getJobClass());
+    }
+
     private void scheduleJobInternal(Class<?> jobClass) {
         boolean disallow = jobClass.isAnnotationPresent(DisallowConcurrentExecution.class);
         if (disallow && running.contains(jobClass)) {
@@ -71,12 +84,17 @@ public class QuartzKubeScheduler {
 
         executor.submit(() -> {
             try {
-                Runnable job = (Runnable) jobClass.getDeclaredConstructor().newInstance();
-                job.run();
+                Object obj = jobClass.getDeclaredConstructor().newInstance();
+                if (obj instanceof Runnable runnable) {
+                    runnable.run();
+                } else if (obj instanceof org.quartz.Job qjob) {
+                    qjob.execute(null);
+                } else {
+                    throw new IllegalArgumentException("Job class does not implement Runnable or Job");
+                }
                 Metrics.getInstance().recordSuccess();
             } catch (Exception e) {
                 Metrics.getInstance().recordFailure();
-                // For now just print the stack trace
                 e.printStackTrace();
             } finally {
                 if (disallow) {
