@@ -1,0 +1,5 @@
+image:
+  repository: quartz-job-runner
+  tag: latest
+  pullPolicy: IfNotPresent
+jobClass: com.quartzkube.examples.HelloWorldJob

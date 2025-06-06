@@ -44,6 +44,8 @@
 # New Tasks
 - [x] Create `QuartzKubeSchedulerFactory` that loads settings from environment variables, system properties, or a properties file.
 - [x] Support hot-reloading the properties file in `QuartzKubeSchedulerFactory`.
+- [x] Provide a Helm chart for deploying HelloWorldJob on Minikube.
+- [x] Document Helm chart usage in DOC.md.
 - [x] Document scheduler factory usage in DOC.md.
 
 ## Upcoming Work
@@ -54,3 +56,5 @@
 - [x] Create release workflow to publish artifacts to GitHub Packages when tags are pushed.
  - [x] Expand DOC.md with more migration examples and troubleshooting tips.
 
+- [x] Move README.md to DESIGN.md.
+- [x] Create new README with Hello World instructions and example.
