@@ -83,6 +83,8 @@ Any custom Kubernetes options (image, resources, etc.) are provided through a `M
 - `RUN_AS_USER`, `RUN_AS_GROUP`, `FS_GROUP` – pod security context
 - `MAX_CONCURRENT_DISPATCHES` – limit concurrent job submissions
 - `CRON_TIME_ZONE` – default time zone for CronJobs
+- `SERVICE_ACCOUNT` – service account name for created pods
+- `K8S_CLIENT_IMPL` – choose `fabric8` (default) or `official` Kubernetes client
 
 Metrics are exposed via JMX under the object name `com.quartzkube.core:type=Metrics`.
 Set `METRICS_PORT` to expose an HTTP `/metrics` endpoint in Prometheus format.
@@ -97,7 +99,8 @@ Set `METRICS_PORT` to expose an HTTP `/metrics` endpoint in Prometheus format.
 - **Pluggable log handler** – assign a `PodLogHandler` (e.g., `Slf4jLogHandler`) to `KubeJobDispatcher` to process pod logs.
 - **Custom labels/annotations** – include `labels` or `annotations` maps in job data to tag created resources.
 - **Pod affinity/anti-affinity** – supply an `affinity` YAML snippet in the job data to set `spec.affinity` rules.
-- **Fabric8 Kubernetes client** – all API calls use the Fabric8 client and jobs are monitored via a watch for completion.
+- **Service account override** – specify `serviceAccount` in job data to use a different service account.
+- **Pluggable Kubernetes client** – set `K8S_CLIENT_IMPL` to `official` to use the official client instead of the default Fabric8 implementation.
 
 ## 7. More Migration Examples
 
@@ -153,6 +156,22 @@ Override the namespace when constructing the dispatcher:
 ```java
 KubeJobDispatcher dispatcher = new KubeJobDispatcher(false, "https://my-cluster", "testing");
 QuartzKubeScheduler scheduler = new QuartzKubeScheduler(dispatcher);
+```
+
+### 7.6 Specify a Service Account
+
+Set a default service account for all pods:
+
+```bash
+export SERVICE_ACCOUNT=job-runner
+```
+
+Override it per job when scheduling:
+
+```java
+JobDataMap map = new JobDataMap();
+map.put("serviceAccount", "batch-runner");
+scheduler.scheduleJob(detail, trig, map);
 ```
 
 ## 8. Troubleshooting
