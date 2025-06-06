@@ -20,9 +20,37 @@
 - [x] Add real log streaming from Kubernetes pods.
 - [x] Enforce a global limit on concurrent job dispatches.
 - [x] Document RBAC setup and cluster requirements.
-- [ ] Expose basic metrics for job execution counts.
-- [ ] Allow configuring pod security context in job templates.
-- [ ] Support custom environment variables per job.
-- [ ] Support custom job templates provided via external YAML files.
-- [ ] Provide a simple persistence mechanism using Kubernetes CRDs.
-- [ ] Support CronJob timeZone configuration.
+- [x] Expose basic metrics for job execution counts.
+- [x] Allow configuring pod security context in job templates.
+- [x] Support custom environment variables per job.
+- [x] Support custom job templates provided via external YAML files.
+- [x] Provide a simple persistence mechanism using Kubernetes CRDs.
+- [x] Support CronJob timeZone configuration.
+- [x] Write DOC.md with user-friendly usage guide and migration examples.
+
+- [x] Add JobResultListener interface and hook into dispatcher to report job success or failure.
+- [x] Document JobResultListener usage in DOC.md.
+
+- [x] Support custom labels and annotations per job for additional metadata.
+- [x] Allow specifying pod affinity/anti-affinity rules.
+- [x] Expose Prometheus metrics endpoint for metrics.
+- [x] Add integration tests using KinD or Minikube to exercise Kubernetes interactions.
+- [x] Add GitHub Actions workflow for Maven build and tests.
+
+## Next Steps
+- [x] Support scheduling via `JobDetail` and `Trigger` objects for better Quartz compatibility.
+- [x] Update DOC.md migration section to demonstrate using `JobDetail` and `Trigger` unchanged.
+
+# New Tasks
+- [x] Create `QuartzKubeSchedulerFactory` that loads settings from environment variables, system properties, or a properties file.
+- [x] Support hot-reloading the properties file in `QuartzKubeSchedulerFactory`.
+- [x] Document scheduler factory usage in DOC.md.
+
+## Upcoming Work
+- [x] Honor Quartz `Trigger` types when scheduling jobs: use `CronTrigger` to dispatch CronJobs and `SimpleTrigger` start times for delayed jobs.
+- [x] Document the new trigger support in DOC.md.
+
+## Future Work
+- [x] Create release workflow to publish artifacts to GitHub Packages when tags are pushed.
+ - [x] Expand DOC.md with more migration examples and troubleshooting tips.
+
