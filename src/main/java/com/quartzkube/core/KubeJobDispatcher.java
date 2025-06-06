@@ -10,7 +10,7 @@ public class KubeJobDispatcher {
     private final boolean localMode;
     private final String apiUrl;
     private final String namespace;
-    private final io.fabric8.kubernetes.client.KubernetesClient client;
+    private final KubernetesApiService apiService;
     private final boolean useWatch;
     private final boolean streamLogs;
     private final java.util.concurrent.Semaphore dispatchLimiter;
@@ -53,12 +53,28 @@ public class KubeJobDispatcher {
         this.namespace = namespace;
         this.useWatch = Boolean.parseBoolean(getConfig("USE_WATCH", "true"));
         this.streamLogs = Boolean.parseBoolean(getConfig("STREAM_LOGS", "true"));
-        io.fabric8.kubernetes.client.Config cfg = new io.fabric8.kubernetes.client.ConfigBuilder()
-                .withMasterUrl(apiUrl)
-                .withNamespace(namespace)
-                .withTrustCerts(true)
-                .build();
-        this.client = new io.fabric8.kubernetes.client.DefaultKubernetesClient(cfg);
+        String impl = getConfig("K8S_CLIENT_IMPL", "fabric8");
+        if ("official".equalsIgnoreCase(impl)) {
+            io.kubernetes.client.openapi.ApiClient client;
+            try {
+                client = io.kubernetes.client.util.ClientBuilder.standard()
+                        .setBasePath(apiUrl)
+                        .build();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            client.setVerifyingSsl(false);
+            this.apiService = new OfficialKubernetesApiService(client, namespace);
+        } else {
+            io.fabric8.kubernetes.client.Config cfg = new io.fabric8.kubernetes.client.ConfigBuilder()
+                    .withMasterUrl(apiUrl)
+                    .withNamespace(namespace)
+                    .withTrustCerts(true)
+                    .build();
+            io.fabric8.kubernetes.client.KubernetesClient client =
+                    new io.fabric8.kubernetes.client.DefaultKubernetesClient(cfg);
+            this.apiService = new Fabric8KubernetesApiService(client, namespace);
+        }
         this.templateBuilder = new JobTemplateBuilder(
             getConfig("JOB_IMAGE", "quartz-job-runner:latest"),
             parseInt(getConfig("JOB_TTL_SECONDS", null)),
@@ -69,7 +85,8 @@ public class KubeJobDispatcher {
             parseInt(getConfig("RUN_AS_USER", null)),
             parseInt(getConfig("RUN_AS_GROUP", null)),
             parseInt(getConfig("FS_GROUP", null)),
-            getConfig("CRON_TIME_ZONE", null)
+            getConfig("CRON_TIME_ZONE", null),
+            getConfig("SERVICE_ACCOUNT", null)
         );
         int l = limit <= 0 ? Integer.MAX_VALUE : limit;
         this.dispatchLimiter = new java.util.concurrent.Semaphore(l);
@@ -137,6 +154,7 @@ public class KubeJobDispatcher {
         java.util.Map<String, String> env = null;
         java.util.Map<String, String> labels = null;
         java.util.Map<String, String> annotations = null;
+        String saOverride = null;
         if (jobData != null) {
             if (jobData.containsKey("k8sImage")) {
                 Object v = jobData.get("k8sImage");
@@ -191,6 +209,12 @@ public class KubeJobDispatcher {
                     }
                 }
             }
+            if (jobData.containsKey("serviceAccount")) {
+                Object v = jobData.get("serviceAccount");
+                if (v != null) {
+                    saOverride = v.toString();
+                }
+            }
             if (jobData.containsKey("timeZone")) {
                 Object v = jobData.get("timeZone");
                 if (v != null) {
@@ -213,12 +237,12 @@ public class KubeJobDispatcher {
 
         String manifest;
         if (templateFile != null) {
-            manifest = templateBuilder.buildCronJobTemplateFromFile(jobClass, schedule, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity);
+            manifest = templateBuilder.buildCronJobTemplateFromFile(jobClass, schedule, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity, saOverride);
         } else {
-            manifest = templateBuilder.buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity);
+            manifest = templateBuilder.buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity, saOverride);
         }
         try {
-            client.load(new java.io.ByteArrayInputStream(manifest.getBytes())).create();
+            apiService.create(manifest);
             Metrics.getInstance().recordSuccess();
         } catch (Exception e) {
             Metrics.getInstance().recordFailure();
@@ -278,6 +302,7 @@ public class KubeJobDispatcher {
         Integer backoffOverride = null;
         String templateFile = null;
         String affinity = null;
+        String saOverride = null;
         java.util.Map<String, String> env = null;
         java.util.Map<String, String> labels = null;
         java.util.Map<String, String> annotations = null;
@@ -335,6 +360,12 @@ public class KubeJobDispatcher {
                     }
                 }
             }
+            if (jobData.containsKey("serviceAccount")) {
+                Object v = jobData.get("serviceAccount");
+                if (v != null) {
+                    saOverride = v.toString();
+                }
+            }
             if (jobData.containsKey("templateFile")) {
                 Object v = jobData.get("templateFile");
                 if (v != null) {
@@ -351,13 +382,13 @@ public class KubeJobDispatcher {
 
         String manifest;
         if (templateFile != null) {
-            manifest = templateBuilder.buildTemplateFromFile(jobClass, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity);
+            manifest = templateBuilder.buildTemplateFromFile(jobClass, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity, saOverride);
         } else {
-            manifest = templateBuilder.buildTemplate(jobClass, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity);
+            manifest = templateBuilder.buildTemplate(jobClass, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity, saOverride);
         }
         boolean submitted = false;
         try {
-            client.load(new java.io.ByteArrayInputStream(manifest.getBytes())).create();
+            apiService.create(manifest);
             Metrics.getInstance().recordSuccess();
             submitted = true;
         } catch (Exception e) {
@@ -383,7 +414,7 @@ public class KubeJobDispatcher {
         }
         String podName = jobClass.toLowerCase();
         try {
-            String logs = client.pods().inNamespace(namespace).withName(podName).getLog();
+            String logs = apiService.readPodLog(podName);
             for (String line : logs.split("\r?\n")) {
                 if (!line.isEmpty()) logHandler.handle(jobClass, line);
             }
@@ -400,10 +431,9 @@ public class KubeJobDispatcher {
         String podName = jobClass.toLowerCase();
         Thread t = new Thread(() -> {
             java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            final io.fabric8.kubernetes.client.Watch watch = client.pods()
-                    .inNamespace(namespace)
-                    .withName(podName)
-                    .watch(new io.fabric8.kubernetes.client.Watcher<io.fabric8.kubernetes.api.model.Pod>() {
+            final io.fabric8.kubernetes.client.Watch watch = apiService.watchPod(
+                    podName,
+                    new io.fabric8.kubernetes.client.Watcher<io.fabric8.kubernetes.api.model.Pod>() {
                         @Override
                         public void eventReceived(Action action, io.fabric8.kubernetes.api.model.Pod pod) {
                             String phase = pod.getStatus() != null ? pod.getStatus().getPhase() : null;

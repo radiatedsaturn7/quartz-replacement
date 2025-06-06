@@ -65,3 +65,8 @@
 - [x] Integrate slf4j logging by providing a pluggable log handler for job output.
 - [x] Replace manual HttpClient calls with the Fabric8 Kubernetes client and add watch-based job monitoring.
 
+
+- [x] Allow specifying service account name for jobs and CronJobs.
+- [x] Document service account configuration in DOC.md.
+- [x] Introduce `KubernetesApiService` abstraction for pluggable client implementations.
+- [x] Provide alternative `KubernetesApiService` using the official Kubernetes client and document customization options.
