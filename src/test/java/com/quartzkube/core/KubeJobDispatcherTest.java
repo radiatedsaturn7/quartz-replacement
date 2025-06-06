@@ -24,6 +24,7 @@ public class KubeJobDispatcherTest {
     @Test
     public void testLocalDispatchRunsJob() {
         KubeJobDispatcher dispatcher = new KubeJobDispatcher(true);
+        LocalJob.count = 0;
         dispatcher.dispatchJob(LocalJob.class.getName());
         assertEquals(1, LocalJob.count);
     }
@@ -203,6 +204,85 @@ public class KubeJobDispatcherTest {
     }
 
     @Test
+    public void testTemplateSecurityContext() {
+        JobTemplateBuilder builder = new JobTemplateBuilder("img", null, null, null, "ns", null, 1000, 2000, 3000, null);
+        String yaml = builder.buildTemplate("com.example.DummyJob", null, null, null, null);
+        assertTrue(yaml.contains("securityContext"));
+        assertTrue(yaml.contains("runAsUser: 1000"));
+        assertTrue(yaml.contains("runAsGroup: 2000"));
+        assertTrue(yaml.contains("fsGroup: 3000"));
+
+        String cron = builder.buildCronJobTemplate("com.example.DummyJob", "*/5 * * * *", null, null, null, null);
+        assertTrue(cron.contains("runAsUser: 1000"));
+        assertTrue(cron.contains("runAsGroup: 2000"));
+        assertTrue(cron.contains("fsGroup: 3000"));
+    }
+
+    @Test
+    public void testTemplateCustomEnv() {
+        JobTemplateBuilder builder = new JobTemplateBuilder("img");
+        java.util.Map<String, String> env = new java.util.HashMap<>();
+        env.put("FOO", "bar");
+        env.put("BAZ", "qux");
+        String yaml = builder.buildTemplate("com.example.DummyJob", null, null, null, null, env);
+        assertTrue(yaml.contains("name: FOO"));
+        assertTrue(yaml.contains("value: \"bar\""));
+
+        String cron = builder.buildCronJobTemplate("com.example.DummyJob", "*/5 * * * *", null, null, null, null, env);
+        assertTrue(cron.contains("name: BAZ"));
+        assertTrue(cron.contains("value: \"qux\""));
+    }
+
+    @Test
+    public void testCronJobTimeZone() {
+        JobTemplateBuilder builder = new JobTemplateBuilder("img");
+        String cron = builder.buildCronJobTemplate("com.example.DummyJob", "*/5 * * * *", null, null, null, null, null, "UTC", null, null, null);
+        assertTrue(cron.contains("timeZone: \"UTC\""));
+    }
+
+    @Test
+    public void testTemplateLabelsAnnotations() {
+        JobTemplateBuilder builder = new JobTemplateBuilder("img");
+        java.util.Map<String, String> labels = new java.util.HashMap<>();
+        labels.put("app", "demo");
+        java.util.Map<String, String> ann = new java.util.HashMap<>();
+        ann.put("team", "qa");
+        String yaml = builder.buildTemplate("com.example.DummyJob", null, null, null, null, null, labels, ann, null);
+        assertTrue(yaml.contains("labels:"));
+        assertTrue(yaml.contains("app: \"demo\""));
+        assertTrue(yaml.contains("annotations:"));
+        assertTrue(yaml.contains("team: \"qa\""));
+
+        String cron = builder.buildCronJobTemplate("com.example.DummyJob", "*/5 * * * *", null, null, null, null, null, "UTC", labels, ann, null);
+        assertTrue(cron.contains("labels:"));
+        assertTrue(cron.contains("annotations:"));
+    }
+
+    @Test
+    public void testTemplateAffinity() {
+        JobTemplateBuilder builder = new JobTemplateBuilder("img");
+        String affinity = "affinity:\n  podAffinity:\n    requiredDuringSchedulingIgnoredDuringExecution:\n    - labelSelector:\n        matchLabels:\n          app: demo\n      topologyKey: kubernetes.io/hostname";
+        String yaml = builder.buildTemplate("com.example.DummyJob", null, null, null, null, null, null, null, affinity);
+        assertTrue(yaml.contains("podAffinity"));
+
+        String cron = builder.buildCronJobTemplate("com.example.DummyJob", "*/5 * * * *", null, null, null, null, null, null, null, null, affinity);
+        assertTrue(cron.contains("podAffinity"));
+    }
+
+    @Test
+    public void testExternalTemplateFile() throws Exception {
+        java.nio.file.Path tmp = java.nio.file.Files.createTempFile("tpl", ".yaml");
+        String template = "kind: Job\nmetadata:\n  name: ${JOB_NAME}\n  namespace: ${NAMESPACE}\nspec:\n  template:\n    spec:\n      containers:\n      - name: job\n        image: ${IMAGE}\n        env:\n        - name: JOB_CLASS\n          value: ${JOB_CLASS}\n";
+        java.nio.file.Files.writeString(tmp, template);
+        JobTemplateBuilder builder = new JobTemplateBuilder("img");
+        String yaml = builder.buildTemplateFromFile("com.example.DummyJob", tmp.toString(), null, null, null, null, null, null, null, null);
+        assertTrue(yaml.contains("name: com.example.dummyjob"));
+        assertTrue(yaml.contains("namespace: default"));
+        assertTrue(yaml.contains("image: img"));
+        assertTrue(yaml.contains("value: \"com.example.DummyJob\""));
+    }
+
+    @Test
     public void testConcurrencyLimit() throws Exception {
         KubeJobDispatcher dispatcher = new KubeJobDispatcher(true, "", "default", 1);
         Runnable call = () -> dispatcher.dispatchJob(SlowLocalJob.class.getName());
@@ -216,5 +296,16 @@ public class KubeJobDispatcherTest {
         t2.join();
         long elapsed = System.currentTimeMillis() - start;
         assertTrue(elapsed >= 400);
+    }
+
+    @Test
+    public void testJobResultListener() {
+        KubeJobDispatcher dispatcher = new KubeJobDispatcher(true);
+        java.util.List<Boolean> results = new java.util.ArrayList<>();
+        dispatcher.addListener((cls, success) -> results.add(success));
+        LocalJob.count = 0;
+        dispatcher.dispatchJob(LocalJob.class.getName());
+        assertEquals(1, results.size());
+        assertTrue(results.get(0));
     }
 }

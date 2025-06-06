@@ -10,6 +10,71 @@ public class JobTemplateBuilder {
     private final String memoryLimit;
     private final String namespace;
     private final Integer backoffLimit;
+    private final Integer runAsUser;
+    private final Integer runAsGroup;
+    private final Integer fsGroup;
+    private final String cronTimeZone;
+
+    private static String readFile(String path) throws java.io.IOException {
+        return java.nio.file.Files.readString(java.nio.file.Path.of(path));
+    }
+
+    private String renderTemplate(String template,
+                                  String jobClass,
+                                  String schedule,
+                                  String image,
+                                  String cpu,
+                                  String memory,
+                                  Integer backoff,
+                                  String timeZone,
+                                  java.util.Map<String, String> extraEnv,
+                                  java.util.Map<String, String> labels,
+                                  java.util.Map<String, String> annotations,
+                                  String affinity) {
+        String envLines = "- name: JOB_CLASS\n          value: \"" + jobClass + "\"";
+        if (extraEnv != null) {
+            for (java.util.Map.Entry<String, String> e : extraEnv.entrySet()) {
+                envLines += "\n        - name: " + e.getKey() + "\n          value: \"" + e.getValue() + "\"";
+            }
+        }
+
+        String labelLines = "";
+        if (labels != null && !labels.isEmpty()) {
+            labelLines = "  labels:\n";
+            for (java.util.Map.Entry<String, String> e : labels.entrySet()) {
+                labelLines += "    " + e.getKey() + ": \"" + e.getValue() + "\"\n";
+            }
+        }
+
+        String annotationLines = "";
+        if (annotations != null && !annotations.isEmpty()) {
+            annotationLines = "  annotations:\n";
+            for (java.util.Map.Entry<String, String> e : annotations.entrySet()) {
+                annotationLines += "    " + e.getKey() + ": \"" + e.getValue() + "\"\n";
+            }
+        }
+
+        template = template.replace("${JOB_CLASS}", "\"" + jobClass + "\"")
+                .replace("${JOB_NAME}", jobClass.toLowerCase())
+                .replace("${NAMESPACE}", namespace)
+                .replace("${IMAGE}", image)
+                .replace("${ENV}", envLines)
+                .replace("${LABELS}", labelLines)
+                .replace("${ANNOTATIONS}", annotationLines)
+                .replace("${AFFINITY}", affinity != null ? affinity : "");
+
+        if (schedule != null) template = template.replace("${SCHEDULE}", schedule);
+        if (timeZone != null) template = template.replace("${TIME_ZONE}", timeZone);
+        if (cpu != null) template = template.replace("${CPU_LIMIT}", cpu);
+        if (memory != null) template = template.replace("${MEMORY_LIMIT}", memory);
+        Integer bo = backoff != null ? backoff : backoffLimit;
+        if (bo != null) template = template.replace("${BACKOFF_LIMIT}", bo.toString());
+        if (ttlSeconds != null) template = template.replace("${TTL_SECONDS}", ttlSeconds.toString());
+        if (runAsUser != null) template = template.replace("${RUN_AS_USER}", runAsUser.toString());
+        if (runAsGroup != null) template = template.replace("${RUN_AS_GROUP}", runAsGroup.toString());
+        if (fsGroup != null) template = template.replace("${FS_GROUP}", fsGroup.toString());
+        return template;
+    }
 
     public JobTemplateBuilder() {
         String envImage = System.getenv("JOB_IMAGE");
@@ -46,6 +111,12 @@ public class JobTemplateBuilder {
             }
         }
         this.backoffLimit = backoff;
+
+        this.runAsUser = parseInt(System.getenv("RUN_AS_USER"));
+        this.runAsGroup = parseInt(System.getenv("RUN_AS_GROUP"));
+        this.fsGroup = parseInt(System.getenv("FS_GROUP"));
+        String tzEnv = System.getenv("CRON_TIME_ZONE");
+        this.cronTimeZone = tzEnv != null && !tzEnv.isEmpty() ? tzEnv : null;
     }
 
     public JobTemplateBuilder(String image) {
@@ -70,36 +141,83 @@ public class JobTemplateBuilder {
         return v == null || v.isEmpty() ? null : v;
     }
 
-    public JobTemplateBuilder(String namespace) {
-        this(
-            getEnvOrDefault("JOB_IMAGE", "quartz-job-runner:latest"),
-            parseInt(System.getenv("JOB_TTL_SECONDS")),
-            emptyToNull(System.getenv("CPU_LIMIT")),
-            emptyToNull(System.getenv("MEMORY_LIMIT")),
-            namespace,
-            parseInt(System.getenv("JOB_BACKOFF_LIMIT"))
-        );
-    }
 
     public JobTemplateBuilder(String image, Integer ttlSeconds) {
         this(image, ttlSeconds, null, null);
     }
 
     public JobTemplateBuilder(String image, Integer ttlSeconds, String cpuLimit, String memoryLimit) {
-        this(image, ttlSeconds, cpuLimit, memoryLimit, System.getenv().getOrDefault("JOB_NAMESPACE", "default"), null);
+        this(image, ttlSeconds, cpuLimit, memoryLimit, System.getenv().getOrDefault("JOB_NAMESPACE", "default"), null, null, null, null, null);
     }
 
     public JobTemplateBuilder(String image, Integer ttlSeconds, String cpuLimit, String memoryLimit, String namespace) {
-        this(image, ttlSeconds, cpuLimit, memoryLimit, namespace, null);
+        this(image, ttlSeconds, cpuLimit, memoryLimit, namespace, null, null, null, null, null);
     }
 
     public JobTemplateBuilder(String image, Integer ttlSeconds, String cpuLimit, String memoryLimit, String namespace, Integer backoffLimit) {
+        this(image, ttlSeconds, cpuLimit, memoryLimit, namespace, backoffLimit, null, null, null, null);
+    }
+
+    public JobTemplateBuilder(String image, Integer ttlSeconds, String cpuLimit, String memoryLimit, String namespace, Integer backoffLimit,
+                              Integer runAsUser, Integer runAsGroup, Integer fsGroup, String cronTimeZone) {
         this.image = image;
         this.ttlSeconds = ttlSeconds;
         this.cpuLimit = cpuLimit;
         this.memoryLimit = memoryLimit;
         this.namespace = namespace;
         this.backoffLimit = backoffLimit;
+        this.runAsUser = runAsUser;
+        this.runAsGroup = runAsGroup;
+        this.fsGroup = fsGroup;
+        this.cronTimeZone = cronTimeZone;
+    }
+
+    /**
+     * Builds a Job manifest from an external YAML template file using simple variable substitution.
+     * Supported variables include ${JOB_CLASS}, ${JOB_NAME}, ${NAMESPACE}, ${IMAGE}, ${ENV},
+     * ${CPU_LIMIT}, ${MEMORY_LIMIT}, ${BACKOFF_LIMIT}, ${TTL_SECONDS}, ${RUN_AS_USER},
+     * ${RUN_AS_GROUP}, ${FS_GROUP}, ${LABELS}, ${ANNOTATIONS}.
+     */
+    public String buildTemplateFromFile(String jobClass, String templateFile, String imageOverride,
+                                        String cpuOverride, String memoryOverride, Integer backoffOverride,
+                                        java.util.Map<String, String> extraEnv,
+                                        java.util.Map<String, String> labels,
+                                        java.util.Map<String, String> annotations,
+                                        String affinity) {
+        try {
+            String template = readFile(templateFile);
+            String img = imageOverride != null ? imageOverride : image;
+            String cpu = cpuOverride != null ? cpuOverride : cpuLimit;
+            String mem = memoryOverride != null ? memoryOverride : memoryLimit;
+            return renderTemplate(template, jobClass, null, img, cpu, mem, backoffOverride, null,
+                    extraEnv, labels, annotations, affinity);
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to read template file", e);
+        }
+    }
+
+    /**
+     * Builds a CronJob manifest from an external YAML template file.
+     * The template may use the same variables as {@link #buildTemplateFromFile} plus ${SCHEDULE}.
+     */
+    public String buildCronJobTemplateFromFile(String jobClass, String schedule, String templateFile, String imageOverride,
+                                               String cpuOverride, String memoryOverride, Integer backoffOverride,
+                                               java.util.Map<String, String> extraEnv, String timeZoneOverride,
+                                               java.util.Map<String, String> labels,
+                                               java.util.Map<String, String> annotations,
+                                               String affinity) {
+        try {
+            String template = readFile(templateFile);
+            String img = imageOverride != null ? imageOverride : image;
+            String cpu = cpuOverride != null ? cpuOverride : cpuLimit;
+            String mem = memoryOverride != null ? memoryOverride : memoryLimit;
+            String tz = timeZoneOverride != null ? timeZoneOverride : cronTimeZone;
+            template = renderTemplate(template, jobClass, schedule, img, cpu, mem, backoffOverride, tz,
+                    extraEnv, labels, annotations, affinity);
+            return template;
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to read template file", e);
+        }
     }
 
     /**
@@ -107,21 +225,33 @@ public class JobTemplateBuilder {
      * This does not apply advanced settings but is enough for testing purposes.
      */
     public String buildTemplate(String jobClass) {
-        return buildTemplate(jobClass, null, null, null, null);
+        return buildTemplate(jobClass, null, null, null, null, null, null, null, null);
     }
 
     /**
      * Builds a basic Kubernetes Job YAML manifest with an optional image override.
      */
     public String buildTemplate(String jobClass, String imageOverride) {
-        return buildTemplate(jobClass, imageOverride, null, null, null);
+        return buildTemplate(jobClass, imageOverride, null, null, null, null, null, null, null);
     }
 
     public String buildTemplate(String jobClass, String imageOverride, String cpuOverride, String memoryOverride) {
-        return buildTemplate(jobClass, imageOverride, cpuOverride, memoryOverride, null);
+        return buildTemplate(jobClass, imageOverride, cpuOverride, memoryOverride, null, null, null, null, null);
     }
 
     public String buildTemplate(String jobClass, String imageOverride, String cpuOverride, String memoryOverride, Integer backoffOverride) {
+        return buildTemplate(jobClass, imageOverride, cpuOverride, memoryOverride, backoffOverride, null, null, null, null);
+    }
+
+    public String buildTemplate(String jobClass, String imageOverride, String cpuOverride, String memoryOverride,
+                               Integer backoffOverride, java.util.Map<String, String> extraEnv) {
+        return buildTemplate(jobClass, imageOverride, cpuOverride, memoryOverride, backoffOverride, extraEnv, null, null, null);
+    }
+
+    public String buildTemplate(String jobClass, String imageOverride, String cpuOverride, String memoryOverride,
+                               Integer backoffOverride, java.util.Map<String, String> extraEnv,
+                               java.util.Map<String, String> labels, java.util.Map<String, String> annotations,
+                               String affinity) {
         String jobName = jobClass.toLowerCase();
         String img = imageOverride != null ? imageOverride : image;
         String ttlLine = "";
@@ -145,23 +275,65 @@ public class JobTemplateBuilder {
                 resourceLines += "            memory: " + mem + "\n";
             }
         }
+        String securityLines = "";
+        if (runAsUser != null || runAsGroup != null || fsGroup != null) {
+            securityLines = "      securityContext:\n";
+            if (runAsUser != null) {
+                securityLines += "        runAsUser: " + runAsUser + "\n";
+            }
+            if (runAsGroup != null) {
+                securityLines += "        runAsGroup: " + runAsGroup + "\n";
+            }
+            if (fsGroup != null) {
+                securityLines += "        fsGroup: " + fsGroup + "\n";
+            }
+        }
+
+        String affinityLines = "";
+        if (affinity != null && !affinity.isEmpty()) {
+            for (String line : affinity.split("\\r?\\n")) {
+                affinityLines += "      " + line + "\n";
+            }
+        }
+
+        String envLines = "        - name: JOB_CLASS\n          value: \"" + jobClass + "\"";
+        if (extraEnv != null) {
+            for (java.util.Map.Entry<String, String> e : extraEnv.entrySet()) {
+                envLines += "\n        - name: " + e.getKey() + "\n          value: \"" + e.getValue() + "\"";
+            }
+        }
+
+        String labelLines = "";
+        if (labels != null && !labels.isEmpty()) {
+            labelLines = "  labels:\n";
+            for (java.util.Map.Entry<String, String> e : labels.entrySet()) {
+                labelLines += "    " + e.getKey() + ": \"" + e.getValue() + "\"\n";
+            }
+        }
+
+        String annotationLines = "";
+        if (annotations != null && !annotations.isEmpty()) {
+            annotationLines = "  annotations:\n";
+            for (java.util.Map.Entry<String, String> e : annotations.entrySet()) {
+                annotationLines += "    " + e.getKey() + ": \"" + e.getValue() + "\"\n";
+            }
+        }
+
         return String.format("""
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: %s
   namespace: %s
-spec:
-%s%s  template:
+%s%s%s  template:
     spec:
       restartPolicy: Never
-      containers:
+%s%s      containers:
       - name: job
         image: %s
 %s        env:
-        - name: JOB_CLASS
-          value: "%s"
-""", jobName, namespace, backoffLine, ttlLine, img, resourceLines, jobClass);
+%s
+""", jobName, namespace, labelLines, annotationLines, backoffLine + ttlLine, securityLines, affinityLines, img, resourceLines, envLines);
     }
 
     /**
@@ -170,14 +342,26 @@ spec:
      * Kubernetes (minute-level granularity).
      */
     public String buildCronJobTemplate(String jobClass, String schedule, String imageOverride) {
-        return buildCronJobTemplate(jobClass, schedule, imageOverride, null, null, null);
+        return buildCronJobTemplate(jobClass, schedule, imageOverride, null, null, null, null, null, null, null, null);
     }
 
     public String buildCronJobTemplate(String jobClass, String schedule, String imageOverride, String cpuOverride, String memoryOverride) {
-        return buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memoryOverride, null);
+        return buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memoryOverride, null, null, null, null, null, null);
     }
 
     public String buildCronJobTemplate(String jobClass, String schedule, String imageOverride, String cpuOverride, String memoryOverride, Integer backoffOverride) {
+        return buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memoryOverride, backoffOverride, null, null, null, null, null);
+    }
+
+    public String buildCronJobTemplate(String jobClass, String schedule, String imageOverride, String cpuOverride, String memoryOverride, Integer backoffOverride, java.util.Map<String, String> extraEnv) {
+        return buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memoryOverride, backoffOverride, extraEnv, null, null, null, null);
+    }
+
+    public String buildCronJobTemplate(String jobClass, String schedule, String imageOverride, String cpuOverride,
+                                       String memoryOverride, Integer backoffOverride, java.util.Map<String, String> extraEnv,
+                                       String timeZoneOverride, java.util.Map<String, String> labels,
+                                       java.util.Map<String, String> annotations,
+                                       String affinity) {
         String jobName = jobClass.toLowerCase();
         String img = imageOverride != null ? imageOverride : image;
         String ttlLine = "";
@@ -201,25 +385,77 @@ spec:
                 resourceLines += "                memory: " + mem + "\n";
             }
         }
-        return String.format("""
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: %s-cron
-  namespace: %s
-spec:
-  schedule: "%s"
-  jobTemplate:
-    spec:
-%s%s      template:
-        spec:
-          restartPolicy: Never
-          containers:
-          - name: job
-            image: %s
-%s            env:
-            - name: JOB_CLASS
-              value: "%s"
-""", jobName, namespace, schedule, backoffLine, ttlLine, img, resourceLines, jobClass);
+        String securityLines = "";
+        if (runAsUser != null || runAsGroup != null || fsGroup != null) {
+            securityLines = "          securityContext:\n";
+            if (runAsUser != null) {
+                securityLines += "            runAsUser: " + runAsUser + "\n";
+            }
+            if (runAsGroup != null) {
+                securityLines += "            runAsGroup: " + runAsGroup + "\n";
+            }
+            if (fsGroup != null) {
+                securityLines += "            fsGroup: " + fsGroup + "\n";
+            }
+        }
+
+        String envLines = "            - name: JOB_CLASS\n              value: \"" + jobClass + "\"";
+        if (extraEnv != null) {
+            for (java.util.Map.Entry<String, String> e : extraEnv.entrySet()) {
+                envLines += "\n            - name: " + e.getKey() + "\n              value: \"" + e.getValue() + "\"";
+            }
+        }
+
+        String labelLines = "";
+        if (labels != null && !labels.isEmpty()) {
+            labelLines = "  labels:\n";
+            for (java.util.Map.Entry<String, String> e : labels.entrySet()) {
+                labelLines += "    " + e.getKey() + ": \"" + e.getValue() + "\"\n";
+            }
+        }
+
+        String annotationLines = "";
+        if (annotations != null && !annotations.isEmpty()) {
+            annotationLines = "  annotations:\n";
+            for (java.util.Map.Entry<String, String> e : annotations.entrySet()) {
+                annotationLines += "    " + e.getKey() + ": \"" + e.getValue() + "\"\n";
+            }
+        }
+
+        String affinityLines = "";
+        if (affinity != null && !affinity.isEmpty()) {
+            for (String line : affinity.split("\\r?\\n")) {
+                affinityLines += "          " + line + "\n";
+            }
+        }
+
+        String tz = timeZoneOverride != null ? timeZoneOverride : cronTimeZone;
+        StringBuilder sb = new StringBuilder();
+        sb.append("apiVersion: batch/v1\n");
+        sb.append("kind: CronJob\n");
+        sb.append("metadata:\n");
+        sb.append("  name: ").append(jobName).append("-cron\n");
+        sb.append("  namespace: ").append(namespace).append("\n");
+        sb.append("spec:\n");
+        sb.append("  schedule: \"").append(schedule).append("\"\n");
+        if (tz != null) sb.append("  timeZone: \"").append(tz).append("\"\n");
+        if (!labelLines.isEmpty()) sb.append(labelLines);
+        if (!annotationLines.isEmpty()) sb.append(annotationLines);
+        sb.append("  jobTemplate:\n");
+        sb.append("    spec:\n");
+        if (!backoffLine.isEmpty()) sb.append(backoffLine);
+        if (!ttlLine.isEmpty()) sb.append(ttlLine);
+        sb.append("      template:\n");
+        sb.append("        spec:\n");
+        sb.append("          restartPolicy: Never\n");
+        if (!securityLines.isEmpty()) sb.append(securityLines);
+        if (!affinityLines.isEmpty()) sb.append(affinityLines);
+        sb.append("          containers:\n");
+        sb.append("          - name: job\n");
+        sb.append("            image: ").append(img).append("\n");
+        if (!resourceLines.isEmpty()) sb.append(resourceLines);
+        sb.append("            env:\n");
+        sb.append(envLines);
+        return sb.toString();
     }
 }
