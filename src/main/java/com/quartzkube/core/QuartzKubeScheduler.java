@@ -4,6 +4,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 import com.quartzkube.core.LeaderElection;
+import com.quartzkube.core.KubeJobDispatcher;
 import org.quartz.JobDetail;
 import org.quartz.Trigger;
 import org.quartz.TriggerListener;
@@ -23,6 +24,8 @@ public class QuartzKubeScheduler {
     private final Map<Class<?>, Queue<Class<?>>> pending = new ConcurrentHashMap<>();
     private final Set<Class<?>> running = ConcurrentHashMap.newKeySet();
     private final JobStore store;
+    private final KubeJobDispatcher dispatcher;
+    private final boolean cronOffload;
     private LeaderElection leaderElection;
     private final List<JobListener> jobListeners = new CopyOnWriteArrayList<>();
     private final List<TriggerListener> triggerListeners = new CopyOnWriteArrayList<>();
@@ -34,6 +37,8 @@ public class QuartzKubeScheduler {
 
     public QuartzKubeScheduler(JobStore store) {
         this.store = store;
+        this.dispatcher = new KubeJobDispatcher();
+        this.cronOffload = Boolean.parseBoolean(getConfig("CRONJOB_OFFLOAD", "false"));
     }
 
     private static String getConfig(String key, String def) {
@@ -52,6 +57,11 @@ public class QuartzKubeScheduler {
     /** Register a TriggerListener to receive trigger events. */
     public void addTriggerListener(TriggerListener l) {
         triggerListeners.add(l);
+    }
+
+    /** Access the underlying KubeJobDispatcher. */
+    public KubeJobDispatcher getDispatcher() {
+        return dispatcher;
     }
 
     /**
@@ -124,6 +134,15 @@ public class QuartzKubeScheduler {
     }
 
     private void scheduleCron(Class<?> jobClass, CronTrigger cron) {
+        if (cronOffload) {
+            java.util.Map<String, Object> data = new java.util.HashMap<>();
+            if (cron.getTimeZone() != null) {
+                data.put("timeZone", cron.getTimeZone().getID());
+            }
+            dispatcher.dispatchCronJob(jobClass.getName(), cron.getCronExpression(),
+                    data.isEmpty() ? null : data);
+            return;
+        }
         CronExpression expr;
         try {
             expr = new CronExpression(cron.getCronExpression());

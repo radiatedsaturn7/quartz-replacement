@@ -48,6 +48,12 @@ scheduler.getDispatcher().dispatchCronJob(MyJob.class.getName(), "*/5 * * * *", 
 
 The optional `timeZone` entry sets the Kubernetes `timeZone` field. You can also specify a global default using the `CRON_TIME_ZONE` environment variable.
 
+### 3.1 CronJob Offload Mode
+
+Set `CRONJOB_OFFLOAD=true` to have `QuartzKubeScheduler` create Kubernetes CronJob resources
+for `CronTrigger` schedules instead of managing them in-process. The trigger's time zone is
+passed through and the scheduler no longer needs to remain running for the jobs to fire.
+
 ## 4. Migration from Quartz
 
 Quartz job classes can be reused without modification. To migrate:
@@ -85,6 +91,7 @@ Any custom Kubernetes options (image, resources, etc.) are provided through a `M
 - `CRON_TIME_ZONE` – default time zone for CronJobs
 - `SERVICE_ACCOUNT` – service account name for created pods
 - `K8S_CLIENT_IMPL` – choose `fabric8` (default) or `official` Kubernetes client
+- `CRONJOB_OFFLOAD` – create Kubernetes CronJobs for cron triggers
 
 Metrics are exposed via JMX under the object name `com.quartzkube.core:type=Metrics`.
 Set `METRICS_PORT` to expose an HTTP `/metrics` endpoint in Prometheus format.
@@ -103,6 +110,7 @@ Metrics include counters for successes, failures, and total job duration along w
 - **Service account override** – specify `serviceAccount` in job data to use a different service account.
 - **Advanced pod templates** – when using `templateFile` or `cronTemplateFile`, include `extraContainers` and `volumes` YAML to add sidecars and mounts.
 - **Pluggable Kubernetes client** – set `K8S_CLIENT_IMPL` to `official` to use the official client instead of the default Fabric8 implementation.
+- **@PersistJobDataAfterExecution** – annotate a job class to have changes to its `JobDataMap` printed as `UPDATED_JOB_DATA` after the job runs.
 
 ## 7. More Migration Examples
 
@@ -182,3 +190,16 @@ scheduler.scheduleJob(detail, trig, map);
 - **Image pull errors** – ensure the job image is accessible from the cluster and any private registry credentials are configured as a Kubernetes secret.
 - **Metrics not exposed** – check that the `METRICS_PORT` environment variable is set and that no firewall blocks access to the chosen port.
 - **Properties file changes ignored** – if using `QuartzKubeSchedulerFactory`, set `HOT_RELOAD=true` to enable automatic reloading.
+
+## 9. High Availability
+
+Enable leader election when running multiple schedulers so only one instance
+dispatches jobs. Set `ENABLE_LEADER_ELECTION=true` and optionally specify
+`KUBE_API_URL`, `JOB_NAMESPACE`, and `LEASE_NAME` to control the Kubernetes
+Lease used for coordination. Combine this with a persistent `JobStore` such as
+`JdbcJobStore` so triggers survive restarts.
+
+QuartzKube also honors basic misfire instructions. Cron triggers using
+`MISFIRE_INSTRUCTION_FIRE_ONCE_NOW` and simple triggers with
+`MISFIRE_INSTRUCTION_FIRE_NOW` run immediately if their scheduled time was
+missed while the scheduler was down or busy.

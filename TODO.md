@@ -76,6 +76,11 @@
 - [x] Add leader election so multiple scheduler instances can coordinate using Kubernetes Lease objects.
 - [x] Record job execution durations and expose them via the Metrics server.
 - [x] Support advanced pod templates allowing multiple containers and volume mounts.
-- [ ] Implement PersistJobDataAfterExecution by capturing updated JobDataMap in JobRunner.
-- [ ] Document high availability setup (leader election, misfire handling) in DOC.md.
- - [ ] Add CronJob offload mode for long-running recurring schedules.
+- [x] Implement PersistJobDataAfterExecution by capturing updated JobDataMap in JobRunner.
+ - [x] Document high availability setup (leader election, misfire handling) in DOC.md.
+ - [x] Add CronJob offload mode for long-running recurring schedules.
+ - [ ] Implement job result capture mechanism in JobRunner and scheduler.
+ - [ ] Document job result capture usage in DOC.md.
+ - [x] Document CronJob offload mode in DOC.md.
+ - [ ] Add integration tests demonstrating leader election failover.
+ - [ ] Monitor Kubernetes CronJobs for completion events when offload mode is enabled.
