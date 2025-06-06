@@ -121,6 +121,20 @@ export LOCAL_MODE=true
 This lets you test your job code with the same scheduler API.
 
 ### 7.3 Using a Custom Namespace
+### 7.4 Helm Example
+
+A ready-to-use Helm chart resides in `charts/hello-world`. Install it after building the project:
+
+```bash
+helm install my-job ./charts/hello-world
+```
+
+Then follow the job logs:
+
+```bash
+kubectl logs job/my-job -f
+```
+
 
 Override the namespace when constructing the dispatcher:
 
