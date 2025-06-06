@@ -11,6 +11,7 @@ public class KubeJobDispatcher {
     private final String apiUrl;
     private final String namespace;
     private final java.util.concurrent.Semaphore dispatchLimiter;
+    private final java.util.List<JobResultListener> listeners = new java.util.ArrayList<>();
 
     public KubeJobDispatcher() {
         this(
@@ -38,9 +39,25 @@ public class KubeJobDispatcher {
         this.localMode = localMode;
         this.apiUrl = apiUrl;
         this.namespace = namespace;
-        this.templateBuilder = new JobTemplateBuilder(namespace);
+        this.templateBuilder = new JobTemplateBuilder(
+            System.getenv().getOrDefault("JOB_IMAGE", "quartz-job-runner:latest"),
+            parseInt(System.getenv("JOB_TTL_SECONDS")),
+            emptyToNull(System.getenv("CPU_LIMIT")),
+            emptyToNull(System.getenv("MEMORY_LIMIT")),
+            namespace,
+            parseInt(System.getenv("JOB_BACKOFF_LIMIT")),
+            parseInt(System.getenv("RUN_AS_USER")),
+            parseInt(System.getenv("RUN_AS_GROUP")),
+            parseInt(System.getenv("FS_GROUP")),
+            System.getenv("CRON_TIME_ZONE")
+        );
         int l = limit <= 0 ? Integer.MAX_VALUE : limit;
         this.dispatchLimiter = new java.util.concurrent.Semaphore(l);
+    }
+
+    /** Register a listener for job completion events. */
+    public void addListener(JobResultListener l) {
+        listeners.add(l);
     }
 
     private static int parseLimit(String v) {
@@ -50,6 +67,19 @@ public class KubeJobDispatcher {
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    private static Integer parseInt(String v) {
+        if (v == null || v.isEmpty()) return null;
+        try {
+            return Integer.parseInt(v);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String emptyToNull(String v) {
+        return v == null || v.isEmpty() ? null : v;
     }
 
     /**
@@ -74,6 +104,12 @@ public class KubeJobDispatcher {
         String cpuOverride = null;
         String memOverride = null;
         Integer backoffOverride = null;
+        String templateFile = null;
+        String affinity = null;
+        String timeZoneOverride = null;
+        java.util.Map<String, String> env = null;
+        java.util.Map<String, String> labels = null;
+        java.util.Map<String, String> annotations = null;
         if (jobData != null) {
             if (jobData.containsKey("k8sImage")) {
                 Object v = jobData.get("k8sImage");
@@ -101,9 +137,59 @@ public class KubeJobDispatcher {
                     } catch (NumberFormatException ignored) { }
                 }
             }
+            if (jobData.containsKey("env")) {
+                Object obj = jobData.get("env");
+                if (obj instanceof java.util.Map<?, ?> m) {
+                    env = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                        env.put(e.getKey().toString(), e.getValue().toString());
+                    }
+                }
+            }
+            if (jobData.containsKey("labels")) {
+                Object obj = jobData.get("labels");
+                if (obj instanceof java.util.Map<?, ?> m) {
+                    labels = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                        labels.put(e.getKey().toString(), e.getValue().toString());
+                    }
+                }
+            }
+            if (jobData.containsKey("annotations")) {
+                Object obj = jobData.get("annotations");
+                if (obj instanceof java.util.Map<?, ?> m) {
+                    annotations = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                        annotations.put(e.getKey().toString(), e.getValue().toString());
+                    }
+                }
+            }
+            if (jobData.containsKey("timeZone")) {
+                Object v = jobData.get("timeZone");
+                if (v != null) {
+                    timeZoneOverride = v.toString();
+                }
+            }
+            if (jobData.containsKey("cronTemplateFile")) {
+                Object v = jobData.get("cronTemplateFile");
+                if (v != null) {
+                    templateFile = v.toString();
+                }
+            }
+            if (jobData.containsKey("affinity")) {
+                Object v = jobData.get("affinity");
+                if (v != null) {
+                    affinity = v.toString();
+                }
+            }
         }
 
-        String manifest = templateBuilder.buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memOverride, backoffOverride);
+        String manifest;
+        if (templateFile != null) {
+            manifest = templateBuilder.buildCronJobTemplateFromFile(jobClass, schedule, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity);
+        } else {
+            manifest = templateBuilder.buildCronJobTemplate(jobClass, schedule, imageOverride, cpuOverride, memOverride, backoffOverride, env, timeZoneOverride, labels, annotations, affinity);
+        }
         try {
             java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
             java.net.URI uri = java.net.URI.create(
@@ -117,7 +203,13 @@ public class KubeJobDispatcher {
                 java.net.http.HttpResponse.BodyHandlers.ofString()
             );
             System.out.println("Submitted cronjob, response code: " + resp.statusCode());
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                Metrics.getInstance().recordSuccess();
+            } else {
+                Metrics.getInstance().recordFailure();
+            }
         } catch (Exception e) {
+            Metrics.getInstance().recordFailure();
             e.printStackTrace();
         }
         streamLogs(jobClass);
@@ -137,6 +229,7 @@ public class KubeJobDispatcher {
      */
     public void dispatchJob(String jobClass, java.util.Map<String, Object> jobData) {
         if (localMode) {
+            boolean success = false;
             try {
                 dispatchLimiter.acquire();
             } catch (InterruptedException ie) {
@@ -147,10 +240,14 @@ public class KubeJobDispatcher {
                 Class<?> clazz = Class.forName(jobClass);
                 Runnable job = (Runnable) clazz.getDeclaredConstructor().newInstance();
                 job.run();
+                Metrics.getInstance().recordSuccess();
+                success = true;
             } catch (Exception e) {
+                Metrics.getInstance().recordFailure();
                 e.printStackTrace();
             } finally {
                 streamLogs(jobClass);
+                notifyResult(jobClass, success);
                 dispatchLimiter.release();
             }
             return;
@@ -166,6 +263,11 @@ public class KubeJobDispatcher {
         String cpuOverride = null;
         String memOverride = null;
         Integer backoffOverride = null;
+        String templateFile = null;
+        String affinity = null;
+        java.util.Map<String, String> env = null;
+        java.util.Map<String, String> labels = null;
+        java.util.Map<String, String> annotations = null;
         if (jobData != null) {
             if (jobData.containsKey("k8sImage")) {
                 Object v = jobData.get("k8sImage");
@@ -193,9 +295,54 @@ public class KubeJobDispatcher {
                     } catch (NumberFormatException ignored) { }
                 }
             }
+            if (jobData.containsKey("env")) {
+                Object obj = jobData.get("env");
+                if (obj instanceof java.util.Map<?, ?> m) {
+                    env = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                        env.put(e.getKey().toString(), e.getValue().toString());
+                    }
+                }
+            }
+            if (jobData.containsKey("labels")) {
+                Object obj = jobData.get("labels");
+                if (obj instanceof java.util.Map<?, ?> m) {
+                    labels = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                        labels.put(e.getKey().toString(), e.getValue().toString());
+                    }
+                }
+            }
+            if (jobData.containsKey("annotations")) {
+                Object obj = jobData.get("annotations");
+                if (obj instanceof java.util.Map<?, ?> m) {
+                    annotations = new java.util.HashMap<>();
+                    for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                        annotations.put(e.getKey().toString(), e.getValue().toString());
+                    }
+                }
+            }
+            if (jobData.containsKey("templateFile")) {
+                Object v = jobData.get("templateFile");
+                if (v != null) {
+                    templateFile = v.toString();
+                }
+            }
+            if (jobData.containsKey("affinity")) {
+                Object v = jobData.get("affinity");
+                if (v != null) {
+                    affinity = v.toString();
+                }
+            }
         }
 
-        String manifest = templateBuilder.buildTemplate(jobClass, imageOverride, cpuOverride, memOverride, backoffOverride);
+        String manifest;
+        if (templateFile != null) {
+            manifest = templateBuilder.buildTemplateFromFile(jobClass, templateFile, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity);
+        } else {
+            manifest = templateBuilder.buildTemplate(jobClass, imageOverride, cpuOverride, memOverride, backoffOverride, env, labels, annotations, affinity);
+        }
+        boolean success = false;
         try {
             java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
             java.net.URI uri = java.net.URI.create(
@@ -209,10 +356,18 @@ public class KubeJobDispatcher {
                 java.net.http.HttpResponse.BodyHandlers.ofString()
             );
             System.out.println("Submitted job, response code: " + resp.statusCode());
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                Metrics.getInstance().recordSuccess();
+                success = true;
+            } else {
+                Metrics.getInstance().recordFailure();
+            }
         } catch (Exception e) {
+            Metrics.getInstance().recordFailure();
             e.printStackTrace();
         }
         streamLogs(jobClass);
+        notifyResult(jobClass, success);
         dispatchLimiter.release();
     }
 
@@ -239,6 +394,14 @@ public class KubeJobDispatcher {
             }
         } catch (Exception e) {
             System.out.println("Failed to stream logs: " + e.getMessage());
+        }
+    }
+
+    private void notifyResult(String jobClass, boolean success) {
+        for (JobResultListener l : listeners) {
+            try {
+                l.jobFinished(jobClass, success);
+            } catch (Exception ignore) {}
         }
     }
 }

@@ -12,11 +12,37 @@ public class QuartzKubeScheduler {
             Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
     private final Map<Class<?>, Queue<Class<?>>> pending = new ConcurrentHashMap<>();
     private final Set<Class<?>> running = ConcurrentHashMap.newKeySet();
+    private final JobStore store;
     private volatile boolean started = false;
 
-    /** Starts the scheduler executor. */
+    public QuartzKubeScheduler() {
+        this(new InMemoryJobStore());
+    }
+
+    public QuartzKubeScheduler(JobStore store) {
+        this.store = store;
+    }
+
+    /**
+     * Starts the scheduler executor, registers metrics and launches the
+     * optional Prometheus endpoint if configured.
+     */
     public void start() {
+        Metrics.init();
+        MetricsServer.init();
         started = true;
+        try {
+            for (String cls : store.loadJobs()) {
+                try {
+                    Class<?> c = Class.forName(cls);
+                    scheduleJobInternal(c);
+                } catch (ClassNotFoundException e) {
+                    e.printStackTrace();
+                }
+            }
+        } catch (Exception e) {
+            // ignore load errors
+        }
     }
 
     /**
@@ -27,7 +53,13 @@ public class QuartzKubeScheduler {
         if (!started) {
             throw new IllegalStateException("Scheduler not started");
         }
+        try {
+            store.saveJob(jobClass.getName());
+        } catch (Exception ignored) {}
+        scheduleJobInternal(jobClass);
+    }
 
+    private void scheduleJobInternal(Class<?> jobClass) {
         boolean disallow = jobClass.isAnnotationPresent(DisallowConcurrentExecution.class);
         if (disallow && running.contains(jobClass)) {
             pending.computeIfAbsent(jobClass, k -> new ArrayDeque<>()).add(jobClass);
@@ -41,7 +73,9 @@ public class QuartzKubeScheduler {
             try {
                 Runnable job = (Runnable) jobClass.getDeclaredConstructor().newInstance();
                 job.run();
+                Metrics.getInstance().recordSuccess();
             } catch (Exception e) {
+                Metrics.getInstance().recordFailure();
                 // For now just print the stack trace
                 e.printStackTrace();
             } finally {
@@ -56,7 +90,8 @@ public class QuartzKubeScheduler {
         Queue<Class<?>> q = pending.get(jobClass);
         Class<?> next;
         if (q != null && (next = q.poll()) != null) {
-            executor.submit(() -> scheduleJob(next));
+            running.remove(jobClass);
+            executor.schedule(() -> scheduleJobInternal(next), 50, java.util.concurrent.TimeUnit.MILLISECONDS);
         } else {
             running.remove(jobClass);
         }
